@@ -48,6 +48,8 @@ module.exports = function(grunt) {
 
     versionType = versionType || opts.versionType;
     var dryRun = grunt.option('dry-run') || opts.dryRun;
+    var parentSha = false;
+    var currentSha = false;
 
     var setVersion = grunt.option('setversion') || opts.setVersion;
     if (setVersion && !semver.valid(setVersion)) {
@@ -58,10 +60,14 @@ module.exports = function(grunt) {
     var gitVersion;    // when bumping using `git describe`
 
     var VERSION_REGEXP = opts.regExp || new RegExp(
-      '([\'|\"]?version[\'|\"]?[ ]*:[ ]*[\'|\"]?)(\\d+\\.\\d+\\.\\d+(-' +
-      opts.prereleaseName +
-      '\\.\\d+)?(-\\d+)?)[\\d||A-a|.|-]*([\'|\"]?)', 'i'
+      '([\'|\"]?version[\'|\"]?[ ]*:[ ]*[\'|\"]?)
+      (\\d+\\.\\d+\\.\\d+
+        (-' +opts.prereleaseName + '\\.\\d+)?
+        (-\\d+)?
+        (' + currentSha + ')?
+      )[\\d||A-a|.|-]*([\'|\"]?)', 'i'
     );
+    grunt.log.ok('VERSION_REGEXP:  '+VERSION_REGEXP)
     if (opts.globalReplace) {
       VERSION_REGEXP = new RegExp(VERSION_REGEXP.source, 'gi');
     }
@@ -99,15 +105,23 @@ module.exports = function(grunt) {
     }
 
     // GET VERSION FROM GIT
-    runIf(opts.bumpVersion && versionType === 'git', function() {
-      exec('git describe ' + opts.gitDescribeOptions, function(err, stdout) {
+    getSha = function (step) {
+      exec('git rev-parse --short HEAD^' + step, function(err, stdout) {
         if (err) {
-          grunt.fatal('Can not get a version number using `git describe`');
+          grunt.fatal('Can not get sha using `git rev-parse`');
         }
-        gitVersion = stdout.trim();
-        next();
-      });
+        return stdout.trim();
+      };
+    };
+
+    runIf(opts.bumpVersion && versionType === 'git', function() {
+      currentSha = getSha(0);
+      parentSha = getSha(1);
+      opts.prereleaseName = parentSha;
+      versionType = 'prerelease';
+      next();
     });
+
 
     // BUMP ALL FILES
     runIf(opts.bumpVersion, function() {
@@ -115,12 +129,12 @@ module.exports = function(grunt) {
         var version = null;
         var content = grunt.file.read(file).replace(
           VERSION_REGEXP,
-          function(match, prefix, parsedVersion, namedPre, noNamePre, suffix) {
-            var type = versionType === 'git' ? 'prerelease' : versionType;
-            version = setVersion || semver.inc(
-              parsedVersion, type || 'patch', gitVersion || opts.prereleaseName
-            );
-            return prefix + version + suffix;
+          function(match, prefix, parsedVersion, namedPre, noNamePre, currentShaMatch, suffix) {
+            if (currentShaMatch) {
+              setVersion = match;
+            }
+            version = setVersion || semver.inc(parsedVersion, versionType || 'patch', opts.prereleaseName);
+            return prefix + version.replace(parentSha, currentSha) + suffix;
           }
         );
 
